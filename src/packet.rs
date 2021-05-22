@@ -1,35 +1,45 @@
 use byteorder::{ByteOrder, LittleEndian};
 use std::io;
-use std::io::prelude::*;
+use std::io::prelude::Write;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 const U24_MAX: usize = 16_777_215;
 
-pub struct PacketWriter<W> {
+pub struct PacketWriter {
     to_write: Vec<u8>,
     seq: u8,
-    w: W,
+    w: TcpStream,
 }
 
-impl<W: Write> Write for PacketWriter<W> {
+impl Write for PacketWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        use std::cmp::min;
-        let left = min(buf.len(), U24_MAX - self.to_write.len());
-        self.to_write.extend(&buf[..left]);
-
-        if self.to_write.len() == U24_MAX {
-            self.end_packet()?;
-        }
-        Ok(left)
+        self.to_write.extend(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.maybe_end_packet()?;
-        self.w.flush()
+        let f = async move {
+            self.maybe_end_packet().await?;
+            self.w.flush().await
+        };
+        let mut r = tokio::runtime::Runtime::new()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "create runtime failed"))?;
+        r.block_on(f)
     }
 }
 
-impl<W: Write> PacketWriter<W> {
-    pub fn new(w: W) -> Self {
+impl PacketWriter {
+    pub fn get_stream(&mut self) -> &mut TcpStream {
+        &mut self.w
+    }
+
+    pub async fn flush_all(&mut self) -> io::Result<()> {
+        self.maybe_end_packet().await?;
+        self.w.flush().await
+    }
+
+    pub fn new(w: TcpStream) -> Self {
         PacketWriter {
             to_write: vec![0, 0, 0, 0],
             seq: 0,
@@ -37,50 +47,46 @@ impl<W: Write> PacketWriter<W> {
         }
     }
 
-    fn maybe_end_packet(&mut self) -> io::Result<()> {
+    async fn maybe_end_packet(&mut self) -> io::Result<()> {
         let len = self.to_write.len() - 4;
         if len != 0 {
             LittleEndian::write_u24(&mut self.to_write[0..3], len as u32);
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
-            self.w.write_all(&self.to_write[..])?;
+            self.w.write_all(&self.to_write[..]).await?;
             self.to_write.truncate(4); // back to just header
         }
         Ok(())
     }
 
-    pub fn end_packet(&mut self) -> io::Result<()> {
-        self.maybe_end_packet()
+    pub async fn end_packet(&mut self) -> io::Result<()> {
+        self.maybe_end_packet().await
     }
-}
 
-impl<W> PacketWriter<W> {
     pub fn set_seq(&mut self, seq: u8) {
         self.seq = seq;
     }
 }
 
-pub struct PacketReader<R> {
+pub struct PacketBuff {
     bytes: Vec<u8>,
     start: usize,
     remaining: usize,
-    r: R,
 }
 
-impl<R> PacketReader<R> {
-    pub fn new(r: R) -> Self {
-        PacketReader {
+impl PacketBuff {
+    pub fn new() -> Self {
+        PacketBuff {
             bytes: Vec::new(),
             start: 0,
             remaining: 0,
-            r,
         }
     }
 }
 
-impl<R: Read> PacketReader<R> {
-    pub fn next(&mut self) -> io::Result<Option<(u8, Packet<'_>)>> {
+impl PacketBuff {
+    pub async fn next(&mut self, reader: &mut TcpStream) -> io::Result<Option<(u8, Packet<'_>)>> {
         self.start = self.bytes.len() - self.remaining;
 
         loop {
@@ -115,7 +121,7 @@ impl<R: Read> PacketReader<R> {
             self.bytes.resize(std::cmp::max(4096, end * 2), 0);
             let read = {
                 let mut buf = &mut self.bytes[end..];
-                self.r.read(&mut buf)?
+                reader.read(&mut buf).await?
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();
@@ -183,6 +189,7 @@ impl<'a> AsRef<[u8]> for Packet<'a> {
 }
 
 use std::ops::Deref;
+
 impl<'a> Deref for Packet<'a> {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
