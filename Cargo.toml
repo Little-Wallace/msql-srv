@@ -36,5 +36,4 @@ async-trait = "0.1"
 [dev-dependencies]
 postgres = "0.15"
 mysql = "18"
-mysql_async = "0.20.0"
 slab = "0.4.2"

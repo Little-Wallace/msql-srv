@@ -153,9 +153,11 @@ pub trait MysqlShim: Send {
     /// give metadata about the types of parameters and returned columns.
     async fn on_prepare(
         &mut self,
-        query: &str,
-        info: StatementMetaWriter<'_>,
-    ) -> Result<(), Self::Error>;
+        _query: &str,
+        _info: StatementMetaWriter<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Called when the client executes a previously prepared statement.
     ///
@@ -164,14 +166,16 @@ pub trait MysqlShim: Send {
     /// [`QueryResultWriter`](struct.QueryResultWriter.html).
     async fn on_execute(
         &mut self,
-        id: u32,
-        params: ParamParser<'_>,
-        results: QueryResultWriter<'_>,
-    ) -> Result<(), Self::Error>;
+        _id: u32,
+        _params: ParamParser<'_>,
+        _results: QueryResultWriter<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Called when the client wishes to deallocate resources associated with a previously prepared
     /// statement.
-    async fn on_close(&mut self, stmt: u32);
+    async fn on_close(&mut self, _stmt: u32) {}
 
     /// Called when the client issues a query for immediate execution.
     ///
@@ -179,9 +183,11 @@ pub trait MysqlShim: Send {
     /// [`QueryResultWriter`](struct.QueryResultWriter.html).
     async fn on_query(
         &mut self,
-        query: &str,
-        results: QueryResultWriter<'_>,
-    ) -> Result<(), Self::Error>;
+        _query: &str,
+        _results: QueryResultWriter<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Called when client switches database.
     async fn on_init(&mut self, _: &str, _: InitWriter<'_>) -> Result<(), Self::Error> {
@@ -246,6 +252,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
         self.writer.flush_all().await?;
 
         {
+
             let (seq, handshake) = self
                 .reader
                 .next(self.writer.get_stream())
@@ -256,6 +263,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                         "peer terminated connection",
                     )
                 })?;
+
             let _handshake = commands::client_handshake(&handshake)
                 .map_err(|e| match e {
                     nom::Err::Incomplete(_) => io::Error::new(
@@ -282,6 +290,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
         }
 
         writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
+
         self.writer.flush_all().await?;
 
         Ok(())
