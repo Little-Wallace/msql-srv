@@ -15,8 +15,8 @@ pub struct InitWriter<'a> {
 
 impl<'a> InitWriter<'a> {
     /// Tell client that database context has been changed
-    pub async fn ok(self) -> io::Result<()> {
-        writers::write_ok_packet(self.writer, 0, 0, StatusFlags::empty()).await
+    pub fn ok(self) -> io::Result<()> {
+        writers::write_ok_packet(self.writer, 0, 0, StatusFlags::empty())
     }
 
     /// Tell client that there was a problem changing the database context.
@@ -27,7 +27,7 @@ impl<'a> InitWriter<'a> {
     where
         E: Borrow<[u8]> + ?Sized,
     {
-        writers::write_err(kind, msg.borrow(), self.writer).await
+        writers::write_err(kind, msg.borrow(), self.writer)
     }
 }
 
@@ -50,7 +50,7 @@ impl<'a> StatementMetaWriter<'a> {
     /// parameters the client must provide when executing the prepared statement. `columns` is a
     /// second set of [`Column`](struct.Column.html) descriptors for the values that will be
     /// returned in each row then the statement is later executed.
-    pub async fn reply<PI, CI>(self, id: u32, params: PI, columns: CI) -> io::Result<()>
+    pub fn reply<PI, CI>(self, id: u32, params: PI, columns: CI) -> io::Result<()>
     where
         PI: IntoIterator<Item = &'a Column>,
         CI: IntoIterator<Item = &'a Column>,
@@ -65,7 +65,7 @@ impl<'a> StatementMetaWriter<'a> {
                 ..Default::default()
             },
         );
-        writers::write_prepare_ok(id, params, columns, self.writer).await
+        writers::write_prepare_ok(id, params, columns, self.writer)
     }
 
     /// Reply to the client's `PREPARE` with an error.
@@ -73,7 +73,7 @@ impl<'a> StatementMetaWriter<'a> {
     where
         E: Borrow<[u8]> + ?Sized,
     {
-        writers::write_err(kind, msg.borrow(), self.writer).await
+        writers::write_err(kind, msg.borrow(), self.writer)
     }
 }
 
@@ -122,13 +122,14 @@ impl<'a> QueryResultWriter<'a> {
             status.set(StatusFlags::SERVER_MORE_RESULTS_EXISTS, true);
         }
         match self.last_end.take() {
-            None => Ok(()),
+            None => (),
             Some(Finalizer::Ok {
                 rows,
                 last_insert_id,
-            }) => writers::write_ok_packet(self.writer, rows, last_insert_id, status).await,
-            Some(Finalizer::EOF) => writers::write_eof_packet(self.writer, status).await,
+            }) => writers::write_ok_packet(self.writer, rows, last_insert_id, status)?,
+            Some(Finalizer::EOF) => writers::write_eof_packet(self.writer, status)?,
         }
+        self.writer.flush_all().await
     }
 
     /// Start a resultset response to the client that conforms to the given `columns`.
@@ -139,7 +140,7 @@ impl<'a> QueryResultWriter<'a> {
     pub async fn start(mut self, columns: &'a [Column]) -> io::Result<RowWriter<'a>> {
         self.finalize(true).await?;
         let mut w = RowWriter::new(self, columns);
-        w.start().await?;
+        w.start()?;
         Ok(w)
     }
 
@@ -173,7 +174,7 @@ impl<'a> QueryResultWriter<'a> {
         E: Borrow<[u8]> + ?Sized,
     {
         self.finalize(true).await?;
-        writers::write_err(kind, msg.borrow(), self.writer).await
+        writers::write_err(kind, msg.borrow(), self.writer)
     }
 
     /// Send the last bits of the last resultset to the client, and indicate that there are no more
@@ -226,9 +227,9 @@ impl<'a> RowWriter<'a> {
     }
 
     #[inline]
-    async fn start(&mut self) -> io::Result<()> {
+    fn start(&mut self) -> io::Result<()> {
         if !self.columns.is_empty() {
-            writers::column_definitions(self.columns, self.result.as_mut().unwrap().writer).await?;
+            writers::column_definitions(self.columns, self.result.as_mut().unwrap().writer)?;
         }
         Ok(())
     }
@@ -293,7 +294,7 @@ impl<'a> RowWriter<'a> {
     }
 
     /// Indicate that no more column data will be written for the current row.
-    pub async fn end_row(&mut self) -> io::Result<()> {
+    pub fn end_row(&mut self) -> io::Result<()> {
         if self.columns.is_empty() {
             self.col += 1;
             return Ok(());
@@ -314,7 +315,7 @@ impl<'a> RowWriter<'a> {
                 .write_all(&self.data[..])?;
             self.data.clear();
         }
-        self.result.as_mut().unwrap().writer.end_packet().await?;
+        self.result.as_mut().unwrap().writer.end_packet();
         self.col = 0;
 
         Ok(())
@@ -326,7 +327,7 @@ impl<'a> RowWriter<'a> {
     /// [`QueryResultWriter::start`](struct.QueryResultWriter.html#method.start). If it does not,
     /// this method will return an error indicating that an invalid value type or specification was
     /// provided.
-    pub async fn write_row<I, E>(&mut self, row: I) -> io::Result<()>
+    pub fn write_row<I, E>(&mut self, row: I) -> io::Result<()>
     where
         I: IntoIterator<Item = E>,
         E: ToMysqlValue,
@@ -336,19 +337,19 @@ impl<'a> RowWriter<'a> {
                 self.write_col(v)?;
             }
         }
-        self.end_row().await
+        self.end_row()
     }
 }
 
 impl<'a> RowWriter<'a> {
-    async fn finish_inner(&mut self) -> io::Result<()> {
+    fn finish_inner(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
         self.finished = true;
 
         if !self.columns.is_empty() && self.col != 0 {
-            self.end_row().await?;
+            self.end_row()?;
         }
 
         if self.columns.is_empty() {
@@ -367,12 +368,12 @@ impl<'a> RowWriter<'a> {
 
     /// Indicate to the client that no more rows are coming.
     pub async fn finish(self) -> io::Result<()> {
-        self.finish_one().await?.no_more_results().await
+        self.finish_one()?.no_more_results().await
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
-    pub async fn finish_one(mut self) -> io::Result<QueryResultWriter<'a>> {
-        self.finish_inner().await?;
+    pub fn finish_one(mut self) -> io::Result<QueryResultWriter<'a>> {
+        self.finish_inner()?;
         // we know that dropping self will see self.finished == true,
         // and so Drop won't try to use self.result.
         Ok(self.result.take().unwrap())

@@ -10,6 +10,7 @@ pub struct PacketWriter {
     to_write: Vec<u8>,
     seq: u8,
     w: TcpStream,
+    last_packet_start: usize,
 }
 
 impl Write for PacketWriter {
@@ -20,7 +21,7 @@ impl Write for PacketWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         let f = async move {
-            self.maybe_end_packet().await?;
+            self.maybe_end_packet();
             self.w.flush().await
         };
         let mut r = tokio::runtime::Runtime::new()
@@ -35,33 +36,41 @@ impl PacketWriter {
     }
 
     pub async fn flush_all(&mut self) -> io::Result<()> {
-        self.maybe_end_packet().await?;
-        self.w.flush().await
+        if self.to_write.len() > 4 {
+            self.maybe_end_packet();
+            self.w.write_all(&self.to_write).await?;
+            self.w.flush().await?;
+            self.to_write.truncate(4);
+            self.last_packet_start = 0;
+        }
+        Ok(())
     }
 
     pub fn new(w: TcpStream) -> Self {
         PacketWriter {
             to_write: vec![0, 0, 0, 0],
             seq: 0,
+            last_packet_start: 0,
             w,
         }
     }
 
-    async fn maybe_end_packet(&mut self) -> io::Result<()> {
-        let len = self.to_write.len() - 4;
+    fn maybe_end_packet(&mut self) {
+        let len = self.to_write.len() - 4 - self.last_packet_start;
         if len != 0 {
-            LittleEndian::write_u24(&mut self.to_write[0..3], len as u32);
-            self.to_write[3] = self.seq;
+            LittleEndian::write_u24(
+                &mut self.to_write[self.last_packet_start..self.last_packet_start + 3],
+                len as u32,
+            );
+            self.to_write[self.last_packet_start + 3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
-
-            self.w.write_all(&self.to_write[..]).await?;
-            self.to_write.truncate(4); // back to just header
+            self.last_packet_start = self.to_write.len();
+            self.to_write.extend(&[0, 0, 0, 0]); // add next packet's header
         }
-        Ok(())
     }
 
-    pub async fn end_packet(&mut self) -> io::Result<()> {
-        self.maybe_end_packet().await
+    pub fn end_packet(&mut self) {
+        self.maybe_end_packet()
     }
 
     pub fn set_seq(&mut self, seq: u8) {

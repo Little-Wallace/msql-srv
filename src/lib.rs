@@ -281,7 +281,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
             self.writer.set_seq(seq + 1);
         }
 
-        writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty()).await?;
+        writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
         self.writer.flush_all().await?;
 
         Ok(())
@@ -308,7 +308,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                                     colflags: myc::constants::ColumnFlags::UNSIGNED_FLAG,
                                 }];
                                 let mut writer = w.start(cols).await?;
-                                writer.write_row(iter::once(67108864u32)).await?;
+                                writer.write_row(iter::once(67108864u32))?;
                                 writer.finish().await?;
                             }
                             _ => {
@@ -388,7 +388,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
                         colflags: myc::constants::ColumnFlags::UNSIGNED_FLAG,
                     }];
-                    writers::write_column_definitions(cols, &mut self.writer, true).await?;
+                    writers::write_column_definitions(cols, &mut self.writer, true)?;
                 }
                 Command::Init(schema) => {
                     let w = InitWriter {
@@ -403,7 +403,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                         .await?;
                 }
                 Command::Ping => {
-                    writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty()).await?;
+                    writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
                 }
                 Command::Quit => {
                     break;
