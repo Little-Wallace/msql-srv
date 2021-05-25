@@ -252,7 +252,6 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
         self.writer.flush_all().await?;
 
         {
-
             let (seq, handshake) = self
                 .reader
                 .next(self.writer.get_stream())

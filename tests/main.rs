@@ -13,102 +13,32 @@ use msql_srv::{
     StatementMetaWriter,
 };
 
-// struct TestingShim<Q, P, E, I> {
-//     columns: Vec<Column>,
-//     params: Vec<Column>,
-//     // on_q: Q,
-//     // on_p: P,
-//     // on_e: E,
-//     // on_i: I,
-// }
-
-// #[async_trait]
-// impl<Q, P, E, I> MysqlShim for TestingShim<Q, P, E, I>
-// where
-//     Q: 'static + Send + FnMut(&str, QueryResultWriter) -> io::Result<()>,
-//     P: 'static + Send + FnMut(&str) -> u32,
-//     E: 'static + Send + FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter) -> io::Result<()>,
-//     I: 'static + Send + FnMut(&str, InitWriter) -> io::Result<()>,
-// {
-//     type Error = io::Error;
-//
-//     async fn on_prepare(&mut self, query: &'a str, info: StatementMetaWriter<'_>) -> io::Result<()> {
-//         let id = (self.on_p)(query);
-//         info.reply(id, &self.params, &self.columns)
-//     }
-//
-//     async fn on_execute(
-//         &mut self,
-//         id: u32,
-//         params: ParamParser<'_>,
-//         results: QueryResultWriter<'_>,
-//     ) -> io::Result<()> {
-//         (self.on_e)(id, params.into_iter().collect(), results)
-//     }
-//
-//     async fn on_close(&mut self, _: u32) {}
-//
-//     async fn on_query(&mut self, query: &str, results: QueryResultWriter) -> io::Result<()> {
-//         (self.on_q)(query, results)
-//     }
-//
-//     async fn on_init(&mut self, schema: &str, writer: InitWriter) -> io::Result<()> {
-//         (self.on_i)(schema, writer)
-//     }
-// }
-
-// impl TestingShim<Q, P, E, I>
-// where
-//     Q: 'static + Send + FnMut(&str, QueryResultWriter) -> io::Result<()>,
-//     P: 'static + Send + FnMut(&str) -> u32,
-//     E: 'static + Send + FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter) -> io::Result<()>,
-//     I: 'static + Send + FnMut(&str, InitWriter) -> io::Result<()>,
-// {
-//     fn new(on_q: Q, on_p: P, on_e: E, on_i: I) -> Self {
-//         TestingShim {
-//             columns: Vec::new(),
-//             params: Vec::new(),
-//             // on_q,
-//             // on_p,
-//             // on_e,
-//             // on_i,
-//         }
-//     }
-//
-//     fn with_params(mut self, p: Vec<Column>) -> Self {
-//         self.params = p;
-//         self
-//     }
-//
-//     fn with_columns(mut self, c: Vec<Column>) -> Self {
-//         self.columns = c;
-//         self
-//     }
-
-    fn db_test<M, C>(db: M, c: C)
-    where
-        M: MysqlShim + 'static,
-        C: FnOnce(&mut mysql::Conn) -> (),
-    {
-        let r = tokio::runtime::Runtime::new().unwrap();
-        let (tx ,rx ) = std::sync::mpsc::channel();
-        let jh = r.spawn(async move {
-            let mut listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            tx.send(port).unwrap();
-            let (s, _) = listener.accept().await.unwrap();
-            MysqlIntermediary::run_on_tcp(db, s).await.unwrap_or_else(|_| {
+fn db_test<M, C>(db: M, c: C)
+where
+    M: MysqlShim + 'static,
+    C: FnOnce(&mut mysql::Conn) -> (),
+{
+    let r = tokio::runtime::Runtime::new().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let jh = r.spawn(async move {
+        let mut listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tx.send(port).unwrap();
+        let (s, _) = listener.accept().await.unwrap();
+        MysqlIntermediary::run_on_tcp(db, s)
+            .await
+            .unwrap_or_else(|_| {
                 println!("run error");
             })
-        });
+    });
 
-        let port = rx.recv().unwrap();
-        let mut conn = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
-        c(&mut conn);
-        drop(conn);
-        let mut r = tokio::runtime::Runtime::new().unwrap();
-        r.block_on(jh).unwrap();
-    }
+    let port = rx.recv().unwrap();
+    let mut conn = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
+    c(&mut conn);
+    drop(conn);
+    let mut r = tokio::runtime::Runtime::new().unwrap();
+    r.block_on(jh).unwrap();
+}
 //}
 
 #[test]
@@ -118,7 +48,7 @@ fn it_connects() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
     }
-    db_test(TestingShim{}, |_| {});
+    db_test(TestingShim {}, |_| {});
 }
 
 #[test]
@@ -128,12 +58,16 @@ fn it_inits_ok() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
 
-        async fn on_init(&mut self, schema: &str, writer: InitWriter<'_>) -> Result<(), Self::Error> {
+        async fn on_init(
+            &mut self,
+            schema: &str,
+            writer: InitWriter<'_>,
+        ) -> Result<(), Self::Error> {
             assert_eq!(schema, "test");
             writer.ok()
         }
     }
-    db_test(TestingShim{}, |db| assert_eq!(true, db.select_db("test")));
+    db_test(TestingShim {}, |db| assert_eq!(true, db.select_db("test")));
 }
 
 #[test]
@@ -143,16 +77,22 @@ fn it_inits_error() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
 
-        async fn on_init(&mut self, schema: &str, writer: InitWriter<'_>) -> Result<(), Self::Error> {
+        async fn on_init(
+            &mut self,
+            schema: &str,
+            writer: InitWriter<'_>,
+        ) -> Result<(), Self::Error> {
             assert_eq!(schema, "test");
-            writer.error(
-                ErrorKind::ER_BAD_DB_ERROR,
-                format!("Database {} not found", schema).as_bytes(),
-            ).await
+            writer
+                .error(
+                    ErrorKind::ER_BAD_DB_ERROR,
+                    format!("Database {} not found", schema).as_bytes(),
+                )
+                .await
         }
     }
 
-    db_test(TestingShim{}, |db| assert_eq!(false, db.select_db("test")));
+    db_test(TestingShim {}, |db| assert_eq!(false, db.select_db("test")));
 }
 
 #[test]
@@ -162,13 +102,17 @@ fn it_inits_on_use_query_ok() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
 
-        async fn on_init(&mut self, schema: &str, writer: InitWriter<'_>) -> Result<(), Self::Error> {
+        async fn on_init(
+            &mut self,
+            schema: &str,
+            writer: InitWriter<'_>,
+        ) -> Result<(), Self::Error> {
             assert_eq!(schema, "test");
             writer.ok()
         }
     }
 
-    db_test(TestingShim{}, |db| match db.query_drop("USE `test`;") {
+    db_test(TestingShim {}, |db| match db.query_drop("USE `test`;") {
         Ok(_) => assert!(true),
         Err(_) => assert!(false),
     });
@@ -182,7 +126,7 @@ fn it_pings() {
         type Error = io::Error;
     }
 
-    db_test(TestingShim{}, |db| assert_eq!(db.ping(), true))
+    db_test(TestingShim {}, |db| assert_eq!(db.ping(), true))
 }
 
 #[test]
@@ -197,7 +141,7 @@ fn empty_response() {
         }
     }
 
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     });
 }
@@ -216,20 +160,24 @@ fn no_rows() {
         }
     }
 
-    db_test(TestingShim { cols: vec![Column {
-        table: String::new(),
-        column: "a".to_owned(),
-        coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
-        colflags: myc::constants::ColumnFlags::empty(),
-    }]}, |db| {
-        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
-    })
+    db_test(
+        TestingShim {
+            cols: vec![Column {
+                table: String::new(),
+                column: "a".to_owned(),
+                coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
+                colflags: myc::constants::ColumnFlags::empty(),
+            }],
+        },
+        |db| {
+            assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
+        },
+    )
 }
 
 #[test]
 fn no_columns() {
-    pub struct TestingShim {
-    }
+    pub struct TestingShim {}
     #[async_trait]
     impl MysqlShim for TestingShim {
         type Error = io::Error;
@@ -256,15 +204,14 @@ fn no_columns_but_rows() {
         }
     }
 
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     });
 }
 
 #[test]
 fn error_response() {
-    pub struct TestingShim {
-    }
+    pub struct TestingShim {}
     #[async_trait]
     impl MysqlShim for TestingShim {
         type Error = io::Error;
@@ -276,7 +223,7 @@ fn error_response() {
     }
 
     let err = (ErrorKind::ER_NO, "clearly not");
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         if let mysql::Error::MySqlError(e) = db.query_iter("SELECT a, b FROM foo").unwrap_err() {
             assert_eq!(
                 e,
@@ -307,17 +254,19 @@ fn empty_on_drop() {
         }
     }
 
-
-    db_test(TestingShim { cols: vec![
-        Column {
-            table: String::new(),
-            column: "a".to_owned(),
-            coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
-            colflags: myc::constants::ColumnFlags::empty(),
-        }
-    ]}, |db| {
-        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
-    })
+    db_test(
+        TestingShim {
+            cols: vec![Column {
+                table: String::new(),
+                column: "a".to_owned(),
+                coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
+                colflags: myc::constants::ColumnFlags::empty(),
+            }],
+        },
+        |db| {
+            assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
+        },
+    )
 }
 
 #[test]
@@ -339,7 +288,7 @@ fn it_queries_nulls() {
             w.finish().await
         }
     }
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         let row = db
             .query_iter("SELECT a, b FROM foo")
             .unwrap()
@@ -370,7 +319,7 @@ fn it_queries() {
         }
     }
 
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         let row = db
             .query_iter("SELECT a, b FROM foo")
             .unwrap()
@@ -404,7 +353,7 @@ fn multi_result() {
         }
     }
 
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         let mut result = db
             .query_iter("SELECT a FROM foo; SELECT a FROM foo")
             .unwrap();
@@ -456,7 +405,7 @@ fn it_queries_many_rows() {
             w.finish().await
         }
     }
-    db_test(TestingShim{}, |db| {
+    db_test(TestingShim {}, |db| {
         let mut rows = 0;
         for row in db.query_iter("SELECT a, b FROM foo").unwrap() {
             let row = row.unwrap();
@@ -483,7 +432,11 @@ fn it_prepares() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
 
-        async fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<'_>) -> io::Result<()> {
+        async fn on_prepare(
+            &mut self,
+            query: &str,
+            info: StatementMetaWriter<'_>,
+        ) -> io::Result<()> {
             assert_eq!(query, "SELECT a FROM b WHERE c = ?");
             let params = vec![Column {
                 table: String::new(),
@@ -635,7 +588,7 @@ fn insert_exec() {
         },
     ];
 
-    db_test(TestingShim { params} ,|db| {
+    db_test(TestingShim { params }, |db| {
         let res = db
             .exec_iter(
                 "INSERT INTO `users` \
@@ -681,7 +634,11 @@ fn send_long() {
     impl MysqlShim for TestingShim {
         type Error = io::Error;
 
-        async fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<'_>) -> io::Result<()> {
+        async fn on_prepare(
+            &mut self,
+            query: &str,
+            info: StatementMetaWriter<'_>,
+        ) -> io::Result<()> {
             assert_eq!(query, "SELECT a FROM b WHERE c = ?");
             info.reply(41, &self.params, &self.cols)
         }
@@ -763,7 +720,7 @@ fn it_prepares_many() {
             w.finish().await
         }
     }
-    db_test(TestingShim {cols}, |db| {
+    db_test(TestingShim { cols }, |db| {
         let mut rows = 0;
         for row in db.exec_iter("SELECT a, b FROM x", ()).unwrap() {
             let row = row.unwrap();
@@ -811,7 +768,7 @@ fn prepared_empty() {
             w.completed(0, 0).await
         }
     }
-    db_test(TestingShim {params, cols}, |db| {
+    db_test(TestingShim { params, cols }, |db| {
         assert_eq!(
             db.exec_iter("SELECT a FROM b WHERE c = ?", (42i16,))
                 .unwrap()
@@ -971,7 +928,7 @@ fn prepared_no_rows() {
             w.start(&self.cols).await?.finish().await
         }
     }
-    db_test(TestingShim{ params, cols}, |db| {
+    db_test(TestingShim { params, cols }, |db| {
         assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
     })
 }

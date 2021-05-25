@@ -38,7 +38,9 @@ impl PacketWriter {
     pub async fn flush_all(&mut self) -> io::Result<()> {
         if self.to_write.len() > 4 {
             self.maybe_end_packet();
-            self.w.write_all(&self.to_write[0..self.last_packet_start]).await?;
+            self.w
+                .write_all(&self.to_write[0..self.last_packet_start])
+                .await?;
             self.w.flush().await?;
             self.to_write.truncate(4);
             self.last_packet_start = 0;
