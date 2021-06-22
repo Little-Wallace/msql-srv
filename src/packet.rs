@@ -24,7 +24,8 @@ impl Write for PacketWriter {
             self.maybe_end_packet();
             self.w.flush().await
         };
-        let mut r = tokio::runtime::Runtime::new()
+        let r = tokio::runtime::Builder::new_current_thread()
+            .build()
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "create runtime failed"))?;
         r.block_on(f)
     }
